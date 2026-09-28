@@ -1,0 +1,32 @@
+# Build output
+build/
+out/
+bin/
+.gradle/
+
+# Reports
+allure-results/
+allure-report/
+.allure/
+
+# Local environment files (never commit real values - see .env.example)
+.env
+docker/.env
+
+# Volumes mounted by docker/docker-compose.yml
+docker/screenshots/
+docker/logs/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and run the UI suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Start the Healenium backend
+        run: docker compose -f docker/docker-compose.yml up -d --wait
+
+      # Compose reports the backend as started as soon as its container is running, which is not
+      # the same as its HTTP port accepting connections. Without this the first scenario races
+      # Spring's start-up and the run looks flaky for reasons that have nothing to do with the
+      # tests. Only Postgres carries a healthcheck; see docker/docker-compose.yml for why.
+      - name: Wait for the backend and the selector-imitator to accept connections
+        run: |
+          for port in 7878 8000; do
+            echo "Waiting for localhost:$port ..."
+            for attempt in $(seq 1 60); do
+              if timeout 1 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+                echo "localhost:$port is up after ${attempt}s"
+                break
+              fi
+              if [ "$attempt" -eq 60 ]; then
+                echo "::error::localhost:$port did not come up within 60s"
+                docker compose -f docker/docker-compose.yml logs --no-color
+                exit 1
+              fi
+              sleep 1
+            done
+          done
+
+      # Chrome is pre-installed on ubuntu-latest and Selenium Manager resolves the matching
+      # driver, so there is no driver binary to download or pin here.
+      - name: Run the suite
+        run: >
+          ./gradlew --no-daemon clean test
+          -Penvironment=ci
+          -Ptags="not @wip"
+
+      - name: Build the Allure report
+        if: always()
+        run: ./gradlew --no-daemon allureReport
+
+      - name: Upload the Allure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: |
+            build/reports/allure-report
+            build/allure-results
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload the self-healing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: healing-report
+          path: |
+            build/healenium
+            docker/screenshots
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload the Gradle test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-test-report
+          path: build/reports/tests/test
+          retention-days: 7
+
+      - name: Backend logs
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml logs --no-color --tail 200
+
+      - name: Stop the Healenium backend
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v

@@ -1,0 +1,34 @@
+# Normalise line endings so the repo behaves the same on every machine.
+#
+# Without this, a clone on Windows can commit CRLF into gradlew, and the script then
+# fails on Linux and macOS with "bad interpreter: /bin/sh^M" - a confusing failure for
+# anyone who adopts the framework from a different OS than the author used.
+
+# Let Git decide what is text and normalise it to LF in the repository.
+* text=auto eol=lf
+
+# Files that MUST keep LF in the working tree, whatever the platform.
+gradlew         text eol=lf
+*.sh            text eol=lf
+*.sql           text eol=lf
+Dockerfile      text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+
+# Windows-only scripts keep CRLF, or cmd.exe mis-parses them.
+gradlew.bat     text eol=crlf
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# Binary: never touch, never diff as text.
+*.jar           binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.pdf           binary
+*.ico           binary
+
+# Keep generated and vendored files out of language statistics and diffs.
+gradle/wrapper/gradle-wrapper.jar linguist-vendored
+*.feature       linguist-language=Gherkin

@@ -1,0 +1,161 @@
+plugins {
+  // java-library (a superset of the java plugin) so that Selenium and Healenium
+  // are exposed on the `api` configuration: this project is meant to be consumed
+  // as a test-automation library, and consumers write page objects against both.
+  id "java-library"
+  // Allure 2 line, deliberately. Allure Gradle plugin 4.x and allure-bom 3.x
+  // exist but belong to the Allure 3 report line; plugin 2.12.0 + allure-bom
+  // 2.35.x is the coherent Allure 2 pairing that most teams already run.
+  id "io.qameta.allure" version "2.12.0"
+}
+
+repositories {
+  mavenCentral()
+}
+
+java {
+  toolchain {
+    languageVersion = JavaLanguageVersion.of(17)
+  }
+  withSourcesJar()
+}
+
+dependencies {
+  // ---------------------------------------------------------------------------
+  // Selenium is pinned to 4.25.0 ON PURPOSE, not out of staleness.
+  // healenium-web 3.6.0's own POM pins selenium.version = 4.25.0, and Healenium
+  // works by proxying Selenium's driver/element internals. Running the exact
+  // Selenium it was built and tested against avoids binary-compatibility
+  // surprises inside that proxy layer. If you bump Selenium, re-run the
+  // @self-healing feature and confirm healing still recovers the element.
+  // ---------------------------------------------------------------------------
+  api "org.seleniumhq.selenium:selenium-java:$seleniumVersion"
+  api "com.epam.healenium:healenium-web:$healeniumVersion"
+  api "org.slf4j:slf4j-api:$slf4jVersion"
+
+  // Screenshots and the healing summary are attached to Allure from main code,
+  // so allure-java-commons is part of this library's compile surface.
+  api platform("io.qameta.allure:allure-bom:$allureVersion")
+  api "io.qameta.allure:allure-java-commons"
+
+  implementation "org.awaitility:awaitility:$awaitilityVersion"
+  // Logback is the chosen SLF4J binding. It is also a compile dependency because
+  // HealingLogBridge attaches an appender to Healenium's logger (see
+  // docs/SELF_HEALING.md - Healenium OSS exposes no programmatic healing
+  // callback). The attach is guarded and degrades to a warning if another SLF4J
+  // binding is on the classpath.
+  implementation "ch.qos.logback:logback-classic:$logbackVersion"
+
+  // ---------------------------------------------------------------------------
+  // Cucumber stays on the 7 line. Cucumber 8 is released, but
+  // io.qameta.allure:allure-cucumber8-jvm does not exist on Maven Central, so 7
+  // is the newest line with a maintained Allure adapter. That adapter, not
+  // inertia, is the constraint.
+  // ---------------------------------------------------------------------------
+  testImplementation "io.cucumber:cucumber-java:$cucumberVersion"
+  testImplementation "io.cucumber:cucumber-junit-platform-engine:$cucumberVersion"
+
+  // ---------------------------------------------------------------------------
+  // JUnit 5.14.x, not 6.x: JUnit 6 moves to JUnit Platform 6, while
+  // cucumber-junit-platform-engine 7.34.x targets the Platform 1.x line that
+  // ships with JUnit 5. The BOM versions junit-jupiter and junit-platform-suite
+  // together so they cannot drift apart.
+  // ---------------------------------------------------------------------------
+  testImplementation platform("org.junit:junit-bom:$junitVersion")
+  testImplementation "org.junit.jupiter:junit-jupiter"
+  testImplementation "org.junit.platform:junit-platform-suite"
+  testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+
+  testImplementation "io.qameta.allure:allure-cucumber7-jvm"
+  testImplementation "org.assertj:assertj-core:$assertjVersion"
+}
+
+configurations.all {
+  resolutionStrategy {
+    // healenium-web drags in its own Selenium coordinates. Force the whole
+    // Selenium graph onto one version so the classpath cannot end up with two.
+    force "org.seleniumhq.selenium:selenium-java:$seleniumVersion"
+    force "org.seleniumhq.selenium:selenium-api:$seleniumVersion"
+    force "org.seleniumhq.selenium:selenium-support:$seleniumVersion"
+    force "org.seleniumhq.selenium:selenium-remote-driver:$seleniumVersion"
+    force "org.seleniumhq.selenium:selenium-chrome-driver:$seleniumVersion"
+    force "org.seleniumhq.selenium:selenium-firefox-driver:$seleniumVersion"
+    force "org.seleniumhq.selenium:selenium-edge-driver:$seleniumVersion"
+  }
+}
+
+allure {
+  version = allureVersion
+  adapter {
+    // The Allure adapter is declared explicitly above (allure-cucumber7-jvm),
+    // so the plugin must not guess one from the classpath.
+    autoconfigure = false
+    // Enables @Step / Allure.step weaving in the test JVM.
+    aspectjWeaver = true
+  }
+}
+
+tasks.withType(JavaCompile).configureEach {
+  options.encoding = "UTF-8"
+  options.compilerArgs << "-Xlint:all" << "-Xlint:-serial"
+}
+
+/**
+ * Gradle -P property  ->  JVM system property read by FrameworkConfig / Cucumber.
+ *
+ * Everything the suite needs at runtime is reachable from the command line, e.g.
+ *   ./gradlew clean test allureReport -Penvironment=ci -Ptags="@smoke" -Pbrowser=firefox
+ *
+ * System properties win over every config file, so a -P flag always takes effect.
+ */
+ext.cliBridge = [
+    environment     : "framework.env",
+    browser         : "browser",
+    headless        : "headless",
+    baseUrl         : "base-url",
+    remoteUrl       : "remote-url",
+    windowWidth     : "selenium-window-width",
+    windowHeight    : "selenium-window-height",
+    retryAttempts   : "retry-attempts",
+    healEnabled     : "heal-enabled",
+    healServerUrl   : "hlm.server.url",
+    healImitatorUrl : "hlm.imitator.url",
+    recoveryTries   : "recovery-tries",
+    scoreCap        : "score-cap",
+    tags            : "cucumber.filter.tags",
+    threads         : "cucumber.execution.parallel.config.fixed.parallelism"
+]
+
+tasks.named("test", Test) {
+  useJUnitPlatform()
+
+  cliBridge.each { gradleProperty, systemProperty ->
+    if (project.hasProperty(gradleProperty)) {
+      systemProperty(systemProperty, project.property(gradleProperty) as String)
+    }
+  }
+
+  // -Pthreads=4 is enough to switch the suite to parallel; no second flag.
+  if (project.hasProperty("threads") && (project.property("threads") as String).toInteger() > 1) {
+    systemProperty("cucumber.execution.parallel.enabled", "true")
+  }
+
+  def allureResults = (project.findProperty("allureResultsDir") ?: "$buildDir/allure-results") as String
+  systemProperty("allure.results.directory", allureResults)
+  systemProperty("allure-results-dir", allureResults)
+  systemProperty("file.encoding", "UTF-8")
+
+  // A UI suite that reports UP-TO-DATE is a UI suite nobody trusts.
+  outputs.upToDateWhen { false }
+
+  testLogging {
+    events "passed", "skipped", "failed"
+    showStandardStreams = false
+    exceptionFormat = "full"
+  }
+}
+
+tasks.named("wrapper", Wrapper) {
+  gradleVersion = "8.10.2"
+  distributionType = Wrapper.DistributionType.BIN
+}

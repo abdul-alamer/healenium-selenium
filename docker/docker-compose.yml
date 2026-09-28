@@ -1,0 +1,95 @@
+# Healenium backend stack: the three services self-healing needs.
+#
+#   postgres-db        stores the node tree of every element a locator has successfully found
+#   healenium          the backend API the test JVM talks to, and the healing report UI
+#   selector-imitator  scores candidate nodes in the current DOM against a stored node tree
+#
+# Start it before running the suite:
+#
+#     docker compose -f docker/docker-compose.yml up -d
+#     ./gradlew test
+#
+# Healing report: http://localhost:7878/healenium/report
+#
+# Ports are bound to 127.0.0.1 so a laptop on a shared network does not quietly publish its
+# element database. Change that only if the test JVM runs somewhere other than this host.
+#
+# No `version:` key: the Compose Specification dropped it, and Compose v2 warns on every
+# invocation when it is present.
+
+services:
+
+  postgres-db:
+    image: postgres:15.5-alpine
+    container_name: postgres-db
+    restart: always
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      - POSTGRES_DB=healenium
+      - POSTGRES_USER=healenium_user
+      # Throwaway local-only value, not a secret. This database holds nothing but element node
+      # trees, and the port is not published beyond this host. For a shared team backend, run
+      # Postgres as managed infrastructure and inject the credential from your secret store.
+      - POSTGRES_PASSWORD=healenium_local_dev_only
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Named volume so learned node trees survive `docker compose down`. Healing depends on what
+      # previous runs stored, so throwing this away throws away the training with it.
+      - healenium-db-data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready ships with the Postgres image, so this probe is guaranteed to exist. The other
+      # two services deliberately have no healthcheck: their images are not guaranteed to carry
+      # curl or wget, and a healthcheck that cannot run is worse than none - `up --wait` would
+      # block on it forever. CI waits on their ports from the runner instead.
+      test: ["CMD-SHELL", "pg_isready -U healenium_user -d healenium"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - healenium
+
+  healenium:
+    image: healenium/hlm-backend:4.0.2
+    container_name: healenium
+    restart: on-failure
+    ports:
+      - "127.0.0.1:7878:7878"
+    environment:
+      - SPRING_POSTGRES_DB=healenium
+      - SPRING_POSTGRES_SCHEMA=healenium
+      - SPRING_POSTGRES_USER=healenium_user
+      - SPRING_POSTGRES_PASSWORD=healenium_local_dev_only
+      - SPRING_POSTGRES_DB_HOST=postgres-db
+      # false: key stored trees by locator alone rather than by locator plus page URL, so a
+      # locator learned on one URL still heals on another page that reuses the same component.
+      - KEY_SELECTOR_URL=false
+      - COLLECT_METRICS=true
+      - HLM_LOG_LEVEL=info
+    volumes:
+      # Before/after screenshots of healed elements, and backend logs. Point the framework's
+      # healing-report-dir at ./screenshots to have them attached to the Allure report too.
+      - ./screenshots/:/screenshots
+      - ./logs/:/logs
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - healenium
+
+  selector-imitator:
+    image: healenium/hlm-selector-imitator:1.4
+    container_name: selector-imitator
+    restart: on-failure
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks:
+      - healenium
+
+volumes:
+  healenium-db-data:
+    name: healenium-db-data
+
+networks:
+  healenium:
+    name: healenium

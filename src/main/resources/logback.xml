@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Working logging defaults for running this framework directly.
+
+  NOTE for library consumers: Logback picks up the first `logback.xml` it finds
+  on the classpath, so if you depend on this project from another build and it
+  wins over your own configuration, either exclude this resource or point
+  Logback at your file explicitly with -Dlogback.configurationFile=...
+-->
+<configuration>
+
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- Framework packages: readable, not noisy. -->
+  <logger name="io.github.abdulalamer.selfhealing" level="INFO"/>
+  <logger name="io.github.abdulalamer.selfhealing.elements" level="INFO"/>
+  <logger name="io.github.abdulalamer.selfhealing.healing" level="INFO"/>
+
+  <!--
+    Healenium must stay at INFO or lower. HealingLogBridge captures healing
+    events from this logger to build the Allure healing summary; raising the
+    level to WARN or OFF silently empties that report.
+  -->
+  <logger name="com.epam.healenium" level="INFO"/>
+
+  <!-- Third-party noise. -->
+  <logger name="org.openqa.selenium" level="WARN"/>
+  <logger name="org.openqa.selenium.remote" level="WARN"/>
+  <logger name="org.openqa.selenium.devtools" level="WARN"/>
+  <logger name="org.apache" level="WARN"/>
+  <logger name="org.apache.hc" level="WARN"/>
+  <logger name="io.netty" level="WARN"/>
+  <logger name="io.cucumber" level="INFO"/>
+  <logger name="org.awaitility" level="WARN"/>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+
+</configuration>
